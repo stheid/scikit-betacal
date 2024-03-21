@@ -1,54 +1,13 @@
 from __future__ import division
-import numpy as np
-from sklearn.base import BaseEstimator, RegressorMixin
-from sklearn.utils import indexable, column_or_1d
-from scipy.optimize import minimize_scalar
-from sklearn.linear_model import LogisticRegression
-
 
 import warnings
 
-
-def _beta_calibration(df, y, sample_weight=None):
-    warnings.filterwarnings("ignore")
-
-    df = column_or_1d(df).reshape(-1, 1)
-    eps = np.finfo(df.dtype).eps
-    df = np.clip(df, eps, 1-eps)
-    y = column_or_1d(y)
-
-    x = np.hstack((df, 1. - df))
-    x = np.log(x)
-    x[:, 1] *= -1
-
-    lr = LogisticRegression(C=99999999999)
-    lr.fit(x, y, sample_weight)
-    coefs = lr.coef_[0]
-
-    if coefs[0] < 0:
-        x = x[:, 1].reshape(-1, 1)
-        lr = LogisticRegression(C=99999999999)
-        lr.fit(x, y, sample_weight)
-        coefs = lr.coef_[0]
-        a = None
-        b = coefs[0]
-    elif coefs[1] < 0:
-        x = x[:, 0].reshape(-1, 1)
-        lr = LogisticRegression(C=99999999999)
-        lr.fit(x, y, sample_weight)
-        coefs = lr.coef_[0]
-        a = coefs[0]
-        b = None
-    else:
-        a = coefs[0]
-        b = coefs[1]
-    inter = lr.intercept_[0]
-
-    a_, b_ = a or 0, b or 0
-    m = minimize_scalar(lambda mh: np.abs(b_*np.log(1.-mh)-a_*np.log(mh)-inter),
-                        bounds=[0, 1], method='Bounded').x
-    map = [a, b, m]
-    return map, lr
+import numpy as np
+from scipy.optimize import minimize_scalar
+from scipy.special import expit
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.linear_model import LogisticRegression
+from sklearn.utils import indexable, column_or_1d
 
 
 class _BetaCal(BaseEstimator, RegressorMixin):
@@ -66,6 +25,10 @@ class _BetaCal(BaseEstimator, RegressorMixin):
     lr_ : sklearn.linear_model.LogisticRegression
         Internal logistic regression used to train the model.
     """
+
+    def __init__(self, penalty=None):
+        self.penalty = penalty
+
     def fit(self, X, y, sample_weight=None):
         """Fit the model using X, y as training data.
 
@@ -88,8 +51,45 @@ class _BetaCal(BaseEstimator, RegressorMixin):
         X = column_or_1d(X)
         y = column_or_1d(y)
         X, y = indexable(X, y)
+        warnings.filterwarnings("ignore")
 
-        self.map_, self.lr_ = _beta_calibration(X, y, sample_weight)
+        df = column_or_1d(X).reshape(-1, 1)
+        eps = np.finfo(df.dtype).eps
+        df = np.clip(df, eps, 1 - eps)
+        y = column_or_1d(y)
+
+        x = np.hstack((df, 1. - df))
+        x = np.log(x)
+        x[:, 1] *= -1
+
+        lr = LogisticRegression(penalty=self.penalty)
+        lr.fit(x, y, sample_weight)
+        coefs = lr.coef_[0]
+
+        if coefs[0] < 0:
+            x = x[:, 1].reshape(-1, 1)
+            lr = LogisticRegression(penalty=self.penalty)
+            lr.fit(x, y, sample_weight)
+            coefs = lr.coef_[0]
+            a = None
+            b = coefs[0]
+        elif coefs[1] < 0:
+            x = x[:, 0].reshape(-1, 1)
+            lr = LogisticRegression(penalty=self.penalty)
+            lr.fit(x, y, sample_weight)
+            coefs = lr.coef_[0]
+            a = coefs[0]
+            b = None
+        else:
+            a = coefs[0]
+            b = coefs[1]
+        inter = lr.intercept_[0]
+
+        a_, b_ = a or 0, b or 0
+        m = minimize_scalar(lambda mh: np.abs(b_ * np.log(1. - mh) - a_ * np.log(mh) - inter),
+                            bounds=[0, 1], method='Bounded').x
+
+        self.map_, self.lr_ = [a, b, m], lr
 
         return self
 
@@ -108,38 +108,17 @@ class _BetaCal(BaseEstimator, RegressorMixin):
         """
         df = column_or_1d(S).reshape(-1, 1)
         eps = np.finfo(df.dtype).eps
-        df = np.clip(df, eps, 1-eps)
+        df = np.clip(df, eps, 1 - eps)
 
         x = np.hstack((df, 1. - df))
         x = np.log(x)
         x[:, 1] *= -1
-        if self.map_[0] == None:
+        if self.map_[0] is None:
             x = x[:, 1].reshape(-1, 1)
-        elif self.map_[1] == None:
+        elif self.map_[1] is None:
             x = x[:, 0].reshape(-1, 1)
 
         return self.lr_.predict_proba(x)[:, 1]
-
-
-def _beta_am_calibration(df, y, sample_weight=None):
-    warnings.filterwarnings("ignore")
-
-    df = column_or_1d(df).reshape(-1, 1)
-    eps = np.finfo(df.dtype).eps
-    df = np.clip(df, eps, 1-eps)
-    y = column_or_1d(y)
-
-    x = np.log(df / (1. - df))
-
-    lr = LogisticRegression(C=99999999999)
-    lr.fit(x, y, sample_weight)
-    coefs = lr.coef_[0]
-    inter = lr.intercept_[0]
-    a = coefs[0]
-    b = a
-    m = 1.0 / (1.0 + np.exp(inter / a))
-    map = [a, b, m]
-    return map, lr
 
 
 class _BetaAMCal(BaseEstimator, RegressorMixin):
@@ -157,6 +136,10 @@ class _BetaAMCal(BaseEstimator, RegressorMixin):
     lr_ : sklearn.linear_model.LogisticRegression
         Internal logistic regression used to train the model.
     """
+
+    def __init__(self, penalty=None):
+        self.penalty = penalty
+
     def fit(self, X, y, sample_weight=None):
         """Fit the model using X, y as training data.
 
@@ -180,7 +163,23 @@ class _BetaAMCal(BaseEstimator, RegressorMixin):
         y = column_or_1d(y)
         X, y = indexable(X, y)
 
-        self.map_, self.lr_ = _beta_am_calibration(X, y, sample_weight)
+        warnings.filterwarnings("ignore")
+
+        df = column_or_1d(X).reshape(-1, 1)
+        eps = np.finfo(df.dtype).eps
+        df = np.clip(df, eps, 1 - eps)
+        y = column_or_1d(y)
+
+        x = np.log(df / (1. - df))
+
+        lr = LogisticRegression(penalty=self.penalty)
+        lr.fit(x, y, sample_weight)
+        coefs = lr.coef_[0]
+        inter = lr.intercept_[0]
+        b = a = coefs[0]
+        m = expit(inter / a)
+
+        self.map_, self.lr_ = [a, b, m]
 
         return self
 
@@ -199,31 +198,10 @@ class _BetaAMCal(BaseEstimator, RegressorMixin):
         """
         df = column_or_1d(S).reshape(-1, 1)
         eps = np.finfo(df.dtype).eps
-        df = np.clip(df, eps, 1-eps)
+        df = np.clip(df, eps, 1 - eps)
 
         x = np.log(df / (1. - df))
         return self.lr_.predict_proba(x)[:, 1]
-
-
-def _beta_ab_calibration(df, y, sample_weight=None):
-    warnings.filterwarnings("ignore")
-
-    df = column_or_1d(df).reshape(-1, 1)
-    eps = np.finfo(df.dtype).eps
-    df = np.clip(df, eps, 1-eps)
-    y = column_or_1d(y)
-
-    x = np.hstack((df, 1. - df))
-    x = np.log(2 * x)
-
-    lr = LogisticRegression(fit_intercept=False, C=99999999999)
-    lr.fit(x, y, sample_weight)
-    coefs = lr.coef_[0]
-    a = coefs[0]
-    b = -coefs[1]
-    m = 0.5
-    map = [a, b, m]
-    return map, lr
 
 
 class _BetaABCal(BaseEstimator, RegressorMixin):
@@ -241,6 +219,10 @@ class _BetaABCal(BaseEstimator, RegressorMixin):
     lr_ : sklearn.linear_model.LogisticRegression
         Internal logistic regression used to train the model.
     """
+
+    def __init__(self, penalty=None):
+        self.penalty = penalty
+
     def fit(self, X, y, sample_weight=None):
         """Fit the model using X, y as training data.
 
@@ -264,7 +246,24 @@ class _BetaABCal(BaseEstimator, RegressorMixin):
         y = column_or_1d(y)
         X, y = indexable(X, y)
 
-        self.map_, self.lr_ = _beta_ab_calibration(X, y, sample_weight)
+        warnings.filterwarnings("ignore")
+
+        df = column_or_1d(X).reshape(-1, 1)
+        eps = np.finfo(df.dtype).eps
+        df = np.clip(df, eps, 1 - eps)
+        y = column_or_1d(y)
+
+        x = np.hstack((df, 1. - df))
+        x = np.log(2 * x)
+
+        lr = LogisticRegression(fit_intercept=False, penalty=self.penalty)
+        lr.fit(x, y, sample_weight)
+        coefs = lr.coef_[0]
+        a = coefs[0]
+        b = -coefs[1]
+        m = 0.5
+
+        self.map_, self.lr_ = [a, b, m], lr
 
         return self
 
@@ -283,31 +282,11 @@ class _BetaABCal(BaseEstimator, RegressorMixin):
         """
         df = column_or_1d(S).reshape(-1, 1)
         eps = np.finfo(df.dtype).eps
-        df = np.clip(df, eps, 1-eps)
+        df = np.clip(df, eps, 1 - eps)
 
         x = np.hstack((df, 1. - df))
         x = np.log(2 * x)
         return self.lr_.predict_proba(x)[:, 1]
-
-
-def _beta_a_calibration(df, y, sample_weight=None):
-    warnings.filterwarnings("ignore")
-
-    df = column_or_1d(df).reshape(-1, 1)
-    eps = np.finfo(df.dtype).eps
-    df = np.clip(df, eps, 1-eps)
-    y = column_or_1d(y)
-
-    x = np.log(df / (1. - df))
-
-    lr = LogisticRegression(fit_intercept=False, C=99999999999)
-    lr.fit(x, y, sample_weight)
-    coefs = lr.coef_[0]
-    a = coefs[0]
-    b = a
-    m = 0.5
-    map = [a, b, m]
-    return map, lr
 
 
 class _BetaACal(BaseEstimator, RegressorMixin):
@@ -325,6 +304,10 @@ class _BetaACal(BaseEstimator, RegressorMixin):
     lr_ : sklearn.linear_model.LogisticRegression
         Internal logistic regression used to train the model.
     """
+
+    def __init__(self, penalty=None):
+        self.penalty = penalty
+
     def fit(self, X, y, sample_weight=None):
         """Fit the model using X, y as training data.
 
@@ -348,7 +331,22 @@ class _BetaACal(BaseEstimator, RegressorMixin):
         y = column_or_1d(y)
         X, y = indexable(X, y)
 
-        self.map_, self.lr_ = _beta_a_calibration(X, y, sample_weight)
+        warnings.filterwarnings("ignore")
+
+        df = column_or_1d(X).reshape(-1, 1)
+        eps = np.finfo(df.dtype).eps
+        df = np.clip(df, eps, 1 - eps)
+        y = column_or_1d(y)
+
+        x = np.log(df / (1. - df))
+
+        lr = LogisticRegression(fit_intercept=False, penalty=self.penalty)
+        lr.fit(x, y, sample_weight)
+        coefs = lr.coef_[0]
+        b = a = coefs[0]
+        m = 0.5
+
+        self.map_, self.lr_ = [a, b, m], lr
 
         return self
 
@@ -367,7 +365,7 @@ class _BetaACal(BaseEstimator, RegressorMixin):
         """
         df = column_or_1d(S).reshape(-1, 1)
         eps = np.finfo(df.dtype).eps
-        df = np.clip(df, eps, 1-eps)
+        df = np.clip(df, eps, 1 - eps)
 
         x = np.log(df / (1. - df))
         return self.lr_.predict_proba(x)[:, 1]

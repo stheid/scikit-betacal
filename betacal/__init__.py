@@ -14,21 +14,26 @@ class BetaCalibration(BaseEstimator, RegressorMixin):
     parameters : string
         Determines which parameters will be calculated by the model. Possible
         values are: "abm" (default), "am" and "ab"
+    penalty : Optional[str]
+        The type of regularization penalty used in the internal logistic regression.
+        This parameter is directly passed on to the scikit-learn LogisticRegression.
+        default: None (no regularization)
 
     Attributes
     ----------
     calibrator_ :
         Internal calibrator object. The type depends on the value of parameters.
     """
-    def __init__(self, parameters="abm"):
+
+    def __init__(self, parameters="abm", penalty=None):
         if parameters == "abm":
-            self.calibrator_ = _BetaCal()
+            self.calibrator_ = _BetaCal(penalty=None)
         elif parameters == "am":
-            self.calibrator_ = _BetaAMCal()
+            self.calibrator_ = _BetaAMCal(penalty=None)
         elif parameters == "ab":
-            self.calibrator_ = _BetaABCal()
+            self.calibrator_ = _BetaABCal(penalty=None)
         elif parameters == "a":
-            self.calibrator_ = _BetaACal()
+            self.calibrator_ = _BetaACal(penalty=None)
         else:
             raise ValueError('Unknown parameters', parameters)
         self.parameters = parameters

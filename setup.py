@@ -25,6 +25,7 @@ setup(
     install_requires=[
         'numpy',
         'scikit-learn',
+        'scipy'
     ],
     long_description=long_description,
     long_description_content_type='text/markdown'
