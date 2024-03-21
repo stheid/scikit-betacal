@@ -27,13 +27,13 @@ class BetaCalibration(BaseEstimator, RegressorMixin):
 
     def __init__(self, parameters="abm", penalty=None):
         if parameters == "abm":
-            self.calibrator_ = _BetaCal(penalty=None)
+            self.calibrator_ = _BetaCal(penalty=penalty)
         elif parameters == "am":
-            self.calibrator_ = _BetaAMCal(penalty=None)
+            self.calibrator_ = _BetaAMCal(penalty=penalty)
         elif parameters == "ab":
-            self.calibrator_ = _BetaABCal(penalty=None)
+            self.calibrator_ = _BetaABCal(penalty=penalty)
         elif parameters == "a":
-            self.calibrator_ = _BetaACal(penalty=None)
+            self.calibrator_ = _BetaACal(penalty=penalty)
         else:
             raise ValueError('Unknown parameters', parameters)
         self.parameters = parameters
